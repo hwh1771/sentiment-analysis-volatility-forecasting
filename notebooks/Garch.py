@@ -68,6 +68,8 @@ class GARCH:
         self.y = np.array(y)
         self.n_obs = len(y)
         e_t = self.y - self.mu
+        self.e_t = e_t  # Clean this part up.
+        self.x = x
 
         try:
             self.y_index = y.index
@@ -99,6 +101,7 @@ class GARCH:
         self.opt_result = opt_result
         print('optimising finished')
        
+       # Save estimated parameters after fitting.
         omega = self.repam(opt_result.x[0])
         alpha = self.repam(opt_result.x[1: self.p + 1])
         beta = self.repam(opt_result.x[self.p + 1: self.p + self.q + 1])
@@ -191,7 +194,24 @@ class GARCH:
             avg_log_like += (np.log(sigma2[t]) + (y[t] - self.mu) ** 2 / sigma2[t]) / t_max
 
         return avg_log_like if fmin else [avg_log_like, sigma2]
+    
 
+    def deviance(self, theta) -> float:
+        """Theta is an array representing the paramters."""
+        # log likelihood of our estimated
+        print(f"{self.opt_result.x}")
+
+        assert len(theta) == len(self.opt_result.x) 
+
+        if self.x is not None:
+            l_p_hat = self.log_likelihood(self.opt_result.x, y=self.y, e_t=self.e_t, x=self.x, fmin=True)
+            l_p_theta = self.log_likelihood(theta, y=self.y, e_t=self.e_t, x=self.x, fmin=True)
+        else:
+            l_p_hat = self.log_likelihood(self.opt_result.x, y=self.y, e_t=self.e_t, fmin=True)
+            l_p_theta = self.log_likelihood(theta, y=self.y, e_t=self.e_t, fmin=True)
+        
+        res = 2 * (l_p_hat - l_p_theta)
+        return res
 
     def _parse_params(self, params_repam, x):
         """Helper function to parse reparameterized parameters into usable form."""
@@ -238,3 +258,46 @@ class GARCH:
     def inv_repam(self, params):
         """Inverse reparameterization for optimization stability."""
         return np.log(params)
+
+
+
+if __name__ == "__main__":
+    import random
+    # Define volatility component coefficients
+    omega, alpha, beta, gamma = 0.1, 0.1, 0.4, 0.05
+    T = 200
+
+    e = [0]  # errors e_t
+    sigma2 = [1] # sigma sigma_t
+    x = np.random.randn(T, 1)
+
+    for t in range(T):
+        sigma2_t = omega + alpha * e[-1]**2 + beta * sigma2[-1] + gamma * x[t]**2
+        e_t = random.gauss(0, sigma2_t**0.5) 
+
+        e.append(e_t)
+        sigma2.append(sigma2_t)
+
+    e = e[1:]
+    sigma2 = sigma2[1:]
+
+
+    garch_with_exo = GARCH(p=1, q=1, z=0)
+    garch_with_exo.train(e)
+
+    betas = np.arange(0, 0.8, 0.05)
+    print(betas)
+    opt_result = garch_with_exo.opt_result.x
+
+    deviance_array = []
+
+    for i in betas:
+        
+        theta = [garch_with_exo.opt_result.x[0], i, garch_with_exo.opt_result.x[2:]]
+        print(theta)
+        beta_deviance = garch_with_exo.deviance(theta)
+        deviance_array.append(beta_deviance)
+    
+    #garch_without_exo = GARCH(p=1, q=1, z=0)
+    #garch_without_exo.train(e)
+    print(deviance_array)
