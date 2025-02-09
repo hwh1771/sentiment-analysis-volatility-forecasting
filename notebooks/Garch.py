@@ -12,7 +12,7 @@ class GARCH:
     """
 
     def __init__(self, alpha: float = 0.1, beta: float = 0.9, omega: float = 0.1,
-                 gammas: float = 0.1, mu=None, p: int = 1, q: int = 1, z: int = 1):
+                 gammas: float = 0.1, mu=None, p: int = 1, q: int = 1, z: int = 1, verbose=False):
         """
         Initialize GARCH model parameters.
 
@@ -45,6 +45,7 @@ class GARCH:
         self.mu = 0 if mu is None else mu
         self.sigma2 = np.array([])
         self.y = np.array([])
+        self.verbose = verbose
 
 
     def __repr__(self):
@@ -70,6 +71,7 @@ class GARCH:
         e_t = self.y - self.mu
         self.e_t = e_t  # Clean this part up.
         self.x = x
+        
 
         try:
             self.y_index = y.index
@@ -87,8 +89,9 @@ class GARCH:
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta, *init_gammas])
         else:
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta])
-       
-        print('optimising')
+
+        if self.verbose:
+            print('Optimising...')
 
         opt_result = opt.minimize(
             self.log_likelihood,
@@ -99,18 +102,22 @@ class GARCH:
             options={'maxiter': 100}
         )
         self.opt_result = opt_result
-        print('optimising finished')
+        
+        if self.verbose:
+            print('Optimising finished.')
        
        # Save estimated parameters after fitting.
-        omega = self.repam(opt_result.x[0])
-        alpha = self.repam(opt_result.x[1: self.p + 1])
-        beta = self.repam(opt_result.x[self.p + 1: self.p + self.q + 1])
+        self.omega = self.repam(opt_result.x[0])
+        self.alpha = self.repam(opt_result.x[1: self.p + 1])
+        self.beta = self.repam(opt_result.x[self.p + 1: self.p + self.q + 1])
 
         if x is not None:
-            gammas = self.repam(opt_result.x[self.p + self.q + 1 :]).reshape(self.z, x.shape[1])
-            print(f"{omega=}\n {alpha=}\n {beta=}\n {gammas=}")
+            self.gammas = self.repam(opt_result.x[self.p + self.q + 1 :]).reshape(self.z, x.shape[1])
+            if self.verbose:
+                print(f"{self.omega=}\n {self.alpha=}\n {self.beta=}\n {self.gammas=}")
         else:
-            print(f"{omega=}\n {alpha=}\n {beta=}\n")
+            if self.verbose:
+                print(f"{self.omega=}\n {self.alpha=}\n {self.beta=}\n")
 
         # Compute sigma2 values using optimised parameters.
         self.sigma2 = np.zeros(self.n_obs)
@@ -119,11 +126,11 @@ class GARCH:
         for t in range(max(self.p, self.q, self.z), self.n_obs):
             if x is not None:
                 #print(x[t - self.z + 1 : t + 1, :])
-                self.sigma2[t] = (omega + np.sum(alpha * (e_t[t - self.p : t] ** 2)) 
-                             + np.sum(beta * (self.sigma2[t - self.q : t])) 
-                             + np.sum(gammas * x[t - self.z + 1 : t + 1, :])) 
+                self.sigma2[t] = (self.omega + np.sum(self.alpha * (e_t[t - self.p : t] ** 2)) 
+                             + np.sum(self.beta * (self.sigma2[t - self.q : t])) 
+                             + np.sum(self.gammas * x[t - self.z + 1 : t + 1, :] ** 2)) 
             else:
-                self.sigma2[t] = omega + np.sum(alpha * (e_t[t - self.p: t] ** 2)) + np.sum(beta * (self.sigma2[t - self.q: t]))
+                self.sigma2[t] = self.omega + np.sum(self.alpha * (e_t[t - self.p: t] ** 2)) + np.sum(self.beta * (self.sigma2[t - self.q: t]))
 
         #print('\nResults of BFGS minimization\n{}\n{}'.format(''.join(['-']*28), opt_result))
         #print('\nResulting params = {}'.format(self.params))
@@ -199,8 +206,6 @@ class GARCH:
     def deviance(self, theta) -> float:
         """Theta is an array representing the paramters."""
         # log likelihood of our estimated
-        print(f"{self.opt_result.x}")
-
         assert len(theta) == len(self.opt_result.x) 
 
         if self.x is not None:
@@ -301,3 +306,4 @@ if __name__ == "__main__":
     #garch_without_exo = GARCH(p=1, q=1, z=0)
     #garch_without_exo.train(e)
     print(deviance_array)
+    print(opt_result)
