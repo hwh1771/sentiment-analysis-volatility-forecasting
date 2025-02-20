@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 import scipy.optimize as opt
+from scipy.stats import t
 
 
 class GARCH:
@@ -11,8 +12,8 @@ class GARCH:
     This class defines the GARCH model object.
     """
 
-    def __init__(self, alpha: float = 0.1, beta: float = 0.9, omega: float = 0.1,
-                 gammas: float = 0.1, mu=None, p: int = 1, q: int = 1, z: int = 1, verbose=False):
+    def __init__(self, alpha: float = 0, beta: float = 0, omega: float = 0,
+                 gammas: float = None, mu=None, p: int = 1, q: int = 1, z: int = 0, verbose=False):
         """
         Initialize GARCH model parameters.
 
@@ -39,6 +40,10 @@ class GARCH:
         self.beta = np.array([beta] * q)
         self.omega = omega
         self.gammas = gammas  # Used when exogenous variables are present
+        self.model_params = {'omega': 0,
+                       'alpha': [0],
+                       'beta': [0],
+                       'gammas':None}
         self.p = p
         self.q = q
         self.z = z
@@ -52,7 +57,7 @@ class GARCH:
         return f"omega = {self.omega:.3g}\nalpha = {self.alpha}\nbeta = {self.beta}"
 
 
-    def train(self, y: pd.Series, x=None, callback_func=None):
+    def train(self, y: pd.Series, x=None, callback_func=None, maxiter=100):
         """
         Estimate parameters using maximum likelihood and fit the GARCH model to the data.
 
@@ -61,31 +66,33 @@ class GARCH:
         y : pd.Series
             Time series data (e.g., returns).
         x : np.array, optional
-            Exogenous variables for the model, by default None.
+            Exogenous variables for the model. Shape is (T, k) for T time steps and k exo variables. 
         callback_func : function, optional
             A callback function for monitoring optimization, by default None.
         """
         self.mu = np.mean(y)
         self.y = np.array(y)
         self.n_obs = len(y)
-        e_t = self.y - self.mu
-        self.e_t = e_t  # Clean this part up.
-        self.x = x
+        e = self.y - self.mu
+        self.x = np.array(x)
         
+        if x is not None:
+            assert len(x) == len(y), "Length of y and x are not equal."
 
         try:
             self.y_index = y.index
-        except Exception as e:
+        except Exception:
             self.y_index = np.arange(self.n_obs)
 
-        init_omega = self.omega
-        init_alpha = self.alpha
-        init_beta = self.beta
+        # Initialise parameter values.
+        init_omega = 0.5
+        init_alpha = np.array([0.5] * self.p)
+        init_beta = np.array([0.5] * self.q)
 
         if x is not None:
             x = np.array(x)
             exo_var_count = x.shape[1]
-            init_gammas = np.array([self.gammas] * exo_var_count * self.z)
+            init_gammas = np.array([0.5] * exo_var_count * self.z)
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta, *init_gammas])
         else:
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta])
@@ -96,75 +103,32 @@ class GARCH:
         opt_result = opt.minimize(
             self.log_likelihood,
             x0=init_params,
-            args=(y, e_t, x, True),
+            args=(y, e, x, True),
             method='BFGS',
             callback=callback_func,
-            options={'maxiter': 100}
+            options={'maxiter': maxiter}
         )
-        self.opt_result = opt_result
         
         if self.verbose:
             print('Optimising finished.')
        
        # Save estimated parameters after fitting.
-        self.omega = self.repam(opt_result.x[0])
-        self.alpha = self.repam(opt_result.x[1: self.p + 1])
-        self.beta = self.repam(opt_result.x[self.p + 1: self.p + self.q + 1])
+        self.model_params = self._parse_params(opt_result.x, x, as_dict=True)
+        self.omega = self.model_params['omega']
+        self.alpha = self.model_params['alpha']
+        self.beta = self.model_params['beta']
+        self.gammas = self.model_params['gammas'] if 'gammas' in self.model_params.keys() else None
 
-        if x is not None:
-            self.gammas = self.repam(opt_result.x[self.p + self.q + 1 :]).reshape(self.z, x.shape[1])
-            if self.verbose:
-                print(f"{self.omega=}\n {self.alpha=}\n {self.beta=}\n {self.gammas=}")
-        else:
-            if self.verbose:
-                print(f"{self.omega=}\n {self.alpha=}\n {self.beta=}\n")
+        if self.verbose:
+            print(self.model_params)
 
-        # Compute sigma2 values using optimised parameters.
-        self.sigma2 = np.zeros(self.n_obs)
-        self.sigma2[0] = np.var(y)
-        
-        for t in range(max(self.p, self.q, self.z), self.n_obs):
-            if x is not None:
-                #print(x[t - self.z + 1 : t + 1, :])
-                self.sigma2[t] = (self.omega + np.sum(self.alpha * (e_t[t - self.p : t] ** 2)) 
-                             + np.sum(self.beta * (self.sigma2[t - self.q : t])) 
-                             + np.sum(self.gammas * x[t - self.z + 1 : t + 1, :] ** 2)) 
-            else:
-                self.sigma2[t] = self.omega + np.sum(self.alpha * (e_t[t - self.p: t] ** 2)) + np.sum(self.beta * (self.sigma2[t - self.q: t]))
+        # Compute sigma2 values using optimised parameters.        
+        self.sigma2 = self.compute_sigma2(e, init_sigma=np.var(y), x=x)
 
-        #print('\nResults of BFGS minimization\n{}\n{}'.format(''.join(['-']*28), opt_result))
-        #print('\nResulting params = {}'.format(self.params))
+        self.information_matrix = self.calculate_information_matrix(e, self.sigma2, x)
 
 
-    def calculate_score(self):
-        # omega
-        del_tminus1 = 0
-        score_omega = [del_tminus1]  # Store the partial derivative over time
-
-        for n in range(self.n_obs): 
-            del_tminus1 = 1 + self.beta[0] * del_tminus1
-            score_omega.append(del_tminus1)
-
-        # alpha
-        del_tminus1 = 0
-        score_alpha = [del_tminus1]  # Store the partial derivative over time
-        for n in range(self.n_obs): 
-            del_tminus1 = (self.y[n] - self.mu)**2 + self.beta[0] * del_tminus1
-            score_alpha.append(del_tminus1)
-
- 
-        del_tminus1 = 0
-        score_beta = [del_tminus1]  # Store the partial derivative over time
-        for n in range(self.n_obs): 
-            del_tminus1 = self.sigma2[n] + self.beta[0] * del_tminus1
-            score_beta.append(del_tminus1)
-
-        omega = np.sum(np.array(score_omega) ** 2) / self.n_obs  
-
-        return score_omega, score_alpha, score_beta
-
-
-    def log_likelihood(self, params_repam, y: pd.Series, e_t, x=None, fmin=False):
+    def log_likelihood(self, params_repam, y: pd.Series, e, x=None, fmin=False):
         """
         Calculate the log likelihood of the GARCH model.
 
@@ -174,7 +138,7 @@ class GARCH:
             Reparameterized parameter array.
         y : pd.Series
             Time series data.
-        e_t : np.array
+        e : np.array
             Residuals from the model mean.
         x : np.array, optional
             Exogenous variables, by default None.
@@ -192,38 +156,257 @@ class GARCH:
 
         for t in range(max(p, q, z), t_max):
             if x is not None:
-                sigma2[t] = (omega + np.sum(alpha * (e_t[t - p : t] ** 2)) 
+                sigma2[t] = (omega + np.sum(alpha * (e[t - p : t] ** 2)) 
                              + np.sum(beta * (sigma2[t - q : t])) 
                              + np.sum(gammas * x[t - z + 1 : t + 1, :] ** 2)) 
             else:
-                sigma2[t] = omega + np.sum(alpha * (e_t[t - p: t] ** 2)) + np.sum(beta * (sigma2[t - q: t]))
+                sigma2[t] = omega + np.sum(alpha * (e[t - p: t] ** 2)) + np.sum(beta * (sigma2[t - q: t]))
 
             avg_log_like += (np.log(sigma2[t]) + (y[t] - self.mu) ** 2 / sigma2[t]) / t_max
 
         return avg_log_like if fmin else [avg_log_like, sigma2]
-    
 
-    def deviance(self, theta) -> float:
-        """Theta is an array representing the paramters."""
-        # log likelihood of our estimated
-        assert len(theta) == len(self.opt_result.x) 
 
-        if self.x is not None:
-            l_p_hat = self.log_likelihood(self.opt_result.x, y=self.y, e_t=self.e_t, x=self.x, fmin=True)
-            l_p_theta = self.log_likelihood(theta, y=self.y, e_t=self.e_t, x=self.x, fmin=True)
-        else:
-            l_p_hat = self.log_likelihood(self.opt_result.x, y=self.y, e_t=self.e_t, fmin=True)
-            l_p_theta = self.log_likelihood(theta, y=self.y, e_t=self.e_t, fmin=True)
+    def compute_sigma2_first_derivative(self, param: str, init_value=None, e=None, sigma2=None, x=None) -> list:
+        """Compute first partial derivative of sigma squared to any parameter. 
+
+        Pass in the necessary time series depending on whih parameter is passed in. E.g. if using beta,
+        pass in sigma2 series. 
+
+        Parameters
+        ----------
+        param : Literal[]
+            One of ['omega', 'alpha', 'beta', 'gamma']
+
+        init_value:
+            If not passed in, will use unconditional expectation of the parameter.
+
+        Returns
+        -------
+        array_like
+            array of first partial derivative of sigma2 to param.
+        """
+        if init_value is None:
+            if param == 'omega':
+                init_value = 1 / (1 - self.beta)
+            elif param == 'alpha' or param == 'beta':
+                if x is None:
+                    init_value = ((self.omega) 
+                              /((1 - self.beta) * (1 - self.alpha - self.beta)))
+                else:
+                    init_value = ((self.omega + self.gammas*np.mean(x**2)) 
+                              /((1 - self.beta) * (1 - self.alpha - self.beta)))
+            elif param == 'gamma':
+                init_value = np.mean(self.x**2) / (1 - self.beta)
+            else:
+                print('Wrong param value passed in')
+                return
+        print(init_value)
+        res = np.zeros(self.n_obs)
+        res[0] = init_value
+
+        for t in range(1, self.n_obs):
+            if param == 'omega':
+                res[t] = 1 + self.beta * res[t-1]
+            elif param == 'alpha':
+                res[t] = e[t-1]**2 + self.beta * res[t-1]
+            elif param == 'beta':
+                res[t] = sigma2[t-1] + self.beta * res[t-1]
+            elif param == 'gamma':
+                res[t] = x[t]**2 + self.beta * res[t-1]
         
-        res = 2 * (l_p_hat - l_p_theta)
         return res
 
-    def _parse_params(self, params_repam, x):
+    
+    def compute_sigma2_second_derivative(self, param_1: str, param_2: str, init_value=None, first_pd: list=None) -> list:
+        """Compute second partial derivative of sigma squared to any two parameters.
+        
+        Note: Param
+
+        Parameters
+        ----------
+        param_1 : str
+             One of ['omega', 'alpha', 'beta', 'gamma']
+        param_2 : str
+             One of ['omega', 'alpha', 'beta', 'gamma']
+        init_value : _type_, optional
+            Second partial derivative value at t=1. If not passed in, will use unconditional expectation of the parameter.
+        first_pd:
+            Only relevant if one of the params is beta. Pass in the first derivative of the other (non beta) parameter.
+
+        Returns
+        -------
+        array_like
+            array of second partial derivative of sigma2 to both params.
+        """
+
+        # If neither param is beta, since the unconditional expectation of the second pd is zero, the whole series is 0.
+        if init_value is None and param_1 != 'beta' and param_2 != 'beta':
+            res = np.zeros(self.n_obs)
+            return res
+        
+        elif init_value is None:
+            if param_2 == 'beta':  # Make param_1 be beta.
+                param_1, param_2 = param_2, param_1
+            
+            if param_2 == 'omega':
+                init_value = 1 / (1 - self.beta)**2
+            elif param_2 == 'alpha' or param_2 == 'beta':
+                if 'gammas' not in self.model_params.keys():
+                    init_value = ((self.omega) 
+                              /((1 - self.beta)**2 * (1 - self.alpha - self.beta)))
+                else:
+                    init_value = ((self.omega + self.gammas*np.mean(self.x**2)) 
+                              /((1 - self.beta)**2 * (1 - self.alpha - self.beta)))
+            elif param_2 == 'gamma':
+                init_value = np.mean(self.x**2) / (1 - self.beta)**2 
+
+        res = np.zeros(self.n_obs)
+        res[0] = init_value
+
+        for t in range(1, self.n_obs): 
+            res[t] = first_pd[t-1] + self.beta * res[t-1]
+
+        return res
+
+    
+    def compute_ll_second_derivative(self, e, sigma2, sec_dev, first_dev_p1, first_dev_p2) -> float:
+        """Calculate second derivative of the log likelihood to any two parameters, p1 and p2.
+
+        The formula of the second derivative of the log likelihood can be found in our file
+        Theoretical Stuff.ipynb. The values of the first partial derivatives to both parameters,
+        and the second partial derivative to both parameters, are arrays (representing the derivative 
+        of sigma^2 at each time step t) and passed in to this function.
+
+        Parameters
+        ----------
+        e : array_like 
+            e array.
+        sigma2 : _type_
+            sigma2 array.
+        sec_dev : array_like
+            second derivative series of sigma^2 to both params.
+        first_dev_p1 : array_like
+            first derivative series of sigma^2 to the first params.
+        first_dev_p2 : array_like
+            first derivative series of sigma^2 to the second params.
+
+        Returns
+        -------
+        float
+            calculated value of the second derivative
+        """
+
+        # Should flatten the factors before doing assertion
+        assert len(sec_dev) == len(first_dev_p1), f"{len(sec_dev)}, {len(first_dev_p1)}"  
+        assert len(sec_dev) == len(first_dev_p2), f"{len(sec_dev)}, {len(first_dev_p2)}"  
+ 
+
+        first_part = sec_dev * (1/sigma2 - e**2 / sigma2**2)
+        second_part = first_dev_p1 * first_dev_p2 * (2*e**2/sigma2**3 - 1/sigma2**2)
+
+        res = -0.5*np.sum(first_part + second_part)
+
+        return res
+    
+
+    def calculate_information_matrix(self, e, sigma2, x=None):
+        """Returns the observed information matrix associated with the log likelihood.
+
+        Parameters
+        ----------
+        e : _type_
+            _description_
+        sigma2 : _type_
+            _description_
+        x : _type_
+            _description_
+
+        Returns
+        -------
+        NDArray
+            The information matrix. 
+        """
+        param_count = 1 + self.p + self.q + self.z
+        information_matrix = np.ones((param_count, param_count))
+
+        # Go in the order of omega, alpha, beta, gamma
+        params = ['omega', 'alpha', 'beta', 'gamma']
+        
+        first_pd = []  # first pd sigma to each parameter.
+        second_pd = [[] for _ in range(param_count)]
+
+        # 1. Compute all first derivative sigma to 4 params. 
+        for i in range(param_count):  # can do list comprehension.
+            first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, x=x)
+            first_pd.append(first_derivatives)
+
+        # 2. Compute all second derivative sigma to each param. For 4 params, now we do 16 operations, but can cut to 10.
+        for i in range(param_count):
+            for j in range(param_count):
+                if params[i] == 'beta':
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[j])
+                    second_pd[i].append(second_derivatives)
+                elif params[j] == 'beta':
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[i])
+                    second_pd[i].append(second_derivatives)
+                else:
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j])
+                    second_pd[i].append(second_derivatives)
+
+        # 3. Compute information matrix
+        for row in range(param_count):
+            for col in range(param_count):
+                information_matrix[row][col] = -1 * self.compute_ll_second_derivative(e, sigma2, second_pd[row][col], first_pd[row], first_pd[col])
+
+        return information_matrix
+    
+
+    def summary(self):
+        info_mat_inv = np.linalg.inv(self.information_matrix).diagonal()
+        
+        index = []
+        coef = []
+        for k, v in self.model_params.items():
+            if type(v) == np.float64:
+                index.append(k)
+                coef.append(v)
+            else:
+                v = v.flatten()
+                for param_ind, param_val in enumerate(v):
+                    index.append(f"{k}[{param_ind}]")
+                    coef.append(param_val)
+
+        diagnosis_df = pd.DataFrame(data={'coef': coef, 'std err': np.sqrt(info_mat_inv)}, index=index)
+        diagnosis_df['t'] = diagnosis_df['coef'] / diagnosis_df['std err']
+        
+        df = self.n_obs - (self.p + self.q + self.z + 1)
+        diagnosis_df['P>|t|'] = t.sf(abs(diagnosis_df['t']), df=df)
+
+        print('='*60)
+        print(diagnosis_df)
+        print('='*60)
+
+        return 
+
+
+    def _parse_params(self, params_repam: list, x, as_dict=False):
         """Helper function to parse reparameterized parameters into usable form."""
         omega = self.repam(params_repam[0])
         alpha = self.repam(params_repam[1: self.p + 1])
         beta = self.repam(params_repam[self.p + 1: self.p + self.q + 1])
         gammas = None if x is None else self.repam(params_repam[self.p + self.q + 1:]).reshape(self.z, x.shape[1])
+
+        if as_dict:
+            if len(alpha) == 1:
+                alpha = alpha[0]
+            if len(beta) == 1:
+                beta = beta[0]
+            params_dict = {'omega': omega, 'alpha': alpha, 'beta': beta, 'gammas': gammas
+            } if x is not None else {'omega': omega, 'alpha': alpha, 'beta': beta}
+
+            return params_dict
+        
         return omega, alpha, beta, gammas
 
 
@@ -256,6 +439,23 @@ class GARCH:
         plt.show()
 
 
+    def compute_sigma2(self,  e: np.array, init_sigma: float=None, x=None):
+        sigma2 = np.zeros(self.n_obs)
+        if init_sigma is None:
+            sigma2[0] = np.var(self.y)
+        else:
+            sigma2[0] = init_sigma
+
+        for t in range(max(self.p, self.q, self.z), self.n_obs):
+            if x is not None:
+                sigma2[t] = (self.omega + np.sum(self.alpha * (e[t - self.p : t] ** 2)) 
+                                + np.sum(self.beta * (sigma2[t - self.q : t])) 
+                                + np.sum(self.gammas * x[t - self.z + 1 : t + 1, :] ** 2)) 
+            else:
+                sigma2[t] = self.omega + np.sum(self.alpha * (e[t - self.p: t] ** 2)) + np.sum(self.beta * (sigma2[t - self.q: t]))
+        return sigma2
+
+
     def repam(self, params):
         """Reparameterize parameters for optimization stability."""
         return np.exp(params)
@@ -268,42 +468,36 @@ class GARCH:
 
 if __name__ == "__main__":
     import random
-    # Define volatility component coefficients
-    omega, alpha, beta, gamma = 0.1, 0.1, 0.4, 0.05
-    T = 200
+    """
+    Test the module.
+    """
 
-    e = [0]  # errors e_t
-    sigma2 = [1] # sigma sigma_t
-    x = np.random.randn(T, 1)
+    def generate_data(omega: float, alpha: float, beta: float, gamma: float, T: int = 1000):
+        e = np.zeros(T)
+        sigma2 = np.zeros(T)
+        x = np.random.randn(T, 1)
 
-    for t in range(T):
-        sigma2_t = omega + alpha * e[-1]**2 + beta * sigma2[-1] + gamma * x[t]**2
-        e_t = random.gauss(0, sigma2_t**0.5) 
+        sigma2[0] = 1  
 
-        e.append(e_t)
-        sigma2.append(sigma2_t)
+        for t in range(1, T):  
+            sigma2[t] = omega + alpha * e[t-1]**2 + beta * sigma2[t-1] #+ gamma * x[t-1]**2
+            e[t] = np.random.normal(0, np.sqrt(sigma2[t]))
 
-    e = e[1:]
-    sigma2 = sigma2[1:]
+        return e, sigma2, x
+
+    omega, alpha, beta, gamma = 0.1, 0.3, 0.4, 0.15
+    e, sigma2, x = generate_data(omega, alpha, beta, gamma, T = 750)
+
+    # Fit using our library. 
+    garch = GARCH(p=1, q=1, z=1, verbose=True)
+    garch.train(e, x=x)
+    print(garch.summary())
 
 
-    garch_with_exo = GARCH(p=1, q=1, z=0)
-    garch_with_exo.train(e)
+    # Fit using ARCH library, without exogeneous
+    from arch import arch_model
+    model = arch_model(e, vol='GARCH', mean='zero', p=1, q=1)
+    garch_fit = model.fit(disp='off', cov_type='classic')
 
-    betas = np.arange(0, 0.8, 0.05)
-    print(betas)
-    opt_result = garch_with_exo.opt_result.x
+    print(garch_fit.summary())
 
-    deviance_array = []
-
-    for i in betas:
-        
-        theta = [garch_with_exo.opt_result.x[0], i, garch_with_exo.opt_result.x[2:]]
-        print(theta)
-        beta_deviance = garch_with_exo.deviance(theta)
-        deviance_array.append(beta_deviance)
-    
-    #garch_without_exo = GARCH(p=1, q=1, z=0)
-    #garch_without_exo.train(e)
-    print(deviance_array)
-    print(opt_result)
