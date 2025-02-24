@@ -1,4 +1,5 @@
 """This module defines the GARCH model object, allowing for exogenous variables in the volatility component."""
+import time
 
 import numpy as np
 import pandas as pd
@@ -57,16 +58,18 @@ class GARCH:
         return f"omega = {self.omega:.3g}\nalpha = {self.alpha}\nbeta = {self.beta}"
 
 
-    def train(self, y: pd.Series, x=None, callback_func=None, maxiter=100):
+    def train(self, y: pd.Series, x=None, callback_func=None, maxiter=100,
+              method='BFGS'):
         """
-        Estimate parameters using maximum likelihood and fit the GARCH model to the data.
+        Estimate model parameters using MLE and fit the GARCH model to the data.
 
         Parameters
         ----------
         y : pd.Series
             Time series data (e.g., returns).
         x : np.array, optional
-            Exogenous variables for the model. Shape is (T, k) for T time steps and k exo variables. 
+            Exogenous variables for the model. Shape is (T, k) for T time steps and 
+            k exo variables. 
         callback_func : function, optional
             A callback function for monitoring optimization, by default None.
         """
@@ -92,6 +95,9 @@ class GARCH:
         if x is not None:
             x = np.array(x)
             exo_var_count = x.shape[1]
+            if exo_var_count != self.z:
+                raise ValueError('Exo variable shape does not match z parameter. Pass in data of shape (T, z)')
+
             init_gammas = np.array([0.5] * exo_var_count * self.z)
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta, *init_gammas])
         else:
@@ -99,18 +105,21 @@ class GARCH:
 
         if self.verbose:
             print('Optimising...')
-
+            
+        start = time.time()
+        
         opt_result = opt.minimize(
             self.log_likelihood,
             x0=init_params,
             args=(y, e, x, True),
-            method='BFGS',
+            method=method,
             callback=callback_func,
             options={'maxiter': maxiter}
         )
-        
+
+        end = time.time()      
         if self.verbose:
-            print('Optimising finished.')
+            print(f'Optimising finished in {(end-start):.3f}s')
        
        # Save estimated parameters after fitting.
         self.model_params = self._parse_params(opt_result.x, x, as_dict=True)
@@ -122,7 +131,7 @@ class GARCH:
         if self.verbose:
             print(self.model_params)
 
-        # Compute sigma2 values using optimised parameters.        
+        # Compute sigma2(hat) values using optimised parameters.        
         self.sigma2 = self.compute_sigma2(e, init_sigma=np.var(y), x=x)
 
         self.information_matrix = self.calculate_information_matrix(e, self.sigma2, x)
@@ -194,14 +203,14 @@ class GARCH:
                     init_value = ((self.omega) 
                               /((1 - self.beta) * (1 - self.alpha - self.beta)))
                 else:
-                    init_value = ((self.omega + self.gammas*np.mean(x**2)) 
+                    init_value = ((self.omega + np.sum(self.gammas*np.mean(x**2))) 
                               /((1 - self.beta) * (1 - self.alpha - self.beta)))
             elif param == 'gamma':
                 init_value = np.mean(self.x**2) / (1 - self.beta)
             else:
                 print('Wrong param value passed in')
                 return
-        print(init_value)
+
         res = np.zeros(self.n_obs)
         res[0] = init_value
 
@@ -213,7 +222,7 @@ class GARCH:
             elif param == 'beta':
                 res[t] = sigma2[t-1] + self.beta * res[t-1]
             elif param == 'gamma':
-                res[t] = x[t]**2 + self.beta * res[t-1]
+                res[t] = np.sum(x[t,:]**2) + self.beta * res[t-1]
         
         return res
 
@@ -239,7 +248,6 @@ class GARCH:
         array_like
             array of second partial derivative of sigma2 to both params.
         """
-
         # If neither param is beta, since the unconditional expectation of the second pd is zero, the whole series is 0.
         if init_value is None and param_1 != 'beta' and param_2 != 'beta':
             res = np.zeros(self.n_obs)
@@ -256,7 +264,7 @@ class GARCH:
                     init_value = ((self.omega) 
                               /((1 - self.beta)**2 * (1 - self.alpha - self.beta)))
                 else:
-                    init_value = ((self.omega + self.gammas*np.mean(self.x**2)) 
+                    init_value = ((self.omega + np.sum(self.gammas*np.mean(self.x**2)))
                               /((1 - self.beta)**2 * (1 - self.alpha - self.beta)))
             elif param_2 == 'gamma':
                 init_value = np.mean(self.x**2) / (1 - self.beta)**2 
@@ -310,7 +318,7 @@ class GARCH:
         return res
     
 
-    def calculate_information_matrix(self, e, sigma2, x=None):
+    def calculate_information_matrix(self, e, sigma2, x=None, init_value=None):
         """Returns the observed information matrix associated with the log likelihood.
 
         Parameters
@@ -331,33 +339,40 @@ class GARCH:
         information_matrix = np.ones((param_count, param_count))
 
         # Go in the order of omega, alpha, beta, gamma
-        params = ['omega', 'alpha', 'beta', 'gamma']
+        params = ['omega'].extend(['alpha']*self.p).extend(['beta']*self.q).extend(['gammas']*self.z)
         
         first_pd = []  # first pd sigma to each parameter.
         second_pd = [[] for _ in range(param_count)]
 
         # 1. Compute all first derivative sigma to 4 params. 
+        cur_z = 0
         for i in range(param_count):  # can do list comprehension.
-            first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, x=x)
+            first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, x=x[:,cur_z], init_value=init_value)
+            if params[i] == 'gammas':
+                cur_z += 1
             first_pd.append(first_derivatives)
 
         # 2. Compute all second derivative sigma to each param. For 4 params, now we do 16 operations, but can cut to 10.
         for i in range(param_count):
             for j in range(param_count):
                 if params[i] == 'beta':
-                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[j])
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[j],
+                                                                               init_value=init_value)
                     second_pd[i].append(second_derivatives)
                 elif params[j] == 'beta':
-                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[i])
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], first_pd=first_pd[i],
+                                                                               init_value=init_value)
                     second_pd[i].append(second_derivatives)
                 else:
-                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j])
+                    second_derivatives = self.compute_sigma2_second_derivative(params[i], params[j], init_value=init_value)
                     second_pd[i].append(second_derivatives)
 
         # 3. Compute information matrix
         for row in range(param_count):
             for col in range(param_count):
                 information_matrix[row][col] = -1 * self.compute_ll_second_derivative(e, sigma2, second_pd[row][col], first_pd[row], first_pd[col])
+
+        print(information_matrix)
 
         return information_matrix
     
@@ -377,17 +392,16 @@ class GARCH:
                     index.append(f"{k}[{param_ind}]")
                     coef.append(param_val)
 
+        print(index)
+        print(coef)
+
         diagnosis_df = pd.DataFrame(data={'coef': coef, 'std err': np.sqrt(info_mat_inv)}, index=index)
         diagnosis_df['t'] = diagnosis_df['coef'] / diagnosis_df['std err']
         
         df = self.n_obs - (self.p + self.q + self.z + 1)
         diagnosis_df['P>|t|'] = t.sf(abs(diagnosis_df['t']), df=df)
 
-        print('='*60)
-        print(diagnosis_df)
-        print('='*60)
-
-        return 
+        return diagnosis_df
 
 
     def _parse_params(self, params_repam: list, x, as_dict=False):
@@ -468,9 +482,6 @@ class GARCH:
 
 if __name__ == "__main__":
     import random
-    """
-    Test the module.
-    """
 
     def generate_data(omega: float, alpha: float, beta: float, gamma: float, T: int = 1000):
         e = np.zeros(T)
@@ -480,10 +491,11 @@ if __name__ == "__main__":
         sigma2[0] = 1  
 
         for t in range(1, T):  
-            sigma2[t] = omega + alpha * e[t-1]**2 + beta * sigma2[t-1] #+ gamma * x[t-1]**2
+            sigma2[t] = omega + alpha * e[t-1]**2 + beta * sigma2[t-1] + gamma * x[t-1]**2
             e[t] = np.random.normal(0, np.sqrt(sigma2[t]))
 
         return e, sigma2, x
+
 
     omega, alpha, beta, gamma = 0.1, 0.3, 0.4, 0.15
     e, sigma2, x = generate_data(omega, alpha, beta, gamma, T = 750)
@@ -491,13 +503,15 @@ if __name__ == "__main__":
     # Fit using our library. 
     garch = GARCH(p=1, q=1, z=1, verbose=True)
     garch.train(e, x=x)
-    print(garch.summary())
+
+    #print(garch.information_matrix)
+    #print(garch.information_matrix_0_start)
 
 
     # Fit using ARCH library, without exogeneous
-    from arch import arch_model
-    model = arch_model(e, vol='GARCH', mean='zero', p=1, q=1)
-    garch_fit = model.fit(disp='off', cov_type='classic')
+    #from arch import arch_model
+    #model = arch_model(e, vol='GARCH', mean='zero', p=1, q=1)
+    #garch_fit = model.fit(disp='off', cov_type='classic')
 
-    print(garch_fit.summary())
+    #print(garch_fit.summary())
 
