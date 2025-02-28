@@ -10,7 +10,41 @@ from scipy.stats import t
 
 class GARCH:
     """
-    This class defines the GARCH model object.
+    GARCH model with exogenous parameter in the volatility component.
+
+    Parameters
+    ----------
+        alpha : float, optional
+            The ARCH component parameter.
+        beta : float, optional
+            The GARCH component parameter.
+        omega : float, optional
+            The constant term in the variance equation.
+        gammas : float, optional
+            The coefficient for exogenous variables.
+        mu : float, optional
+            Mean of the returns, by default None.
+        p : int, optional
+            Lag order for the ARCH component, by default 1.
+        q : int, optional
+            Lag order for the GARCH component, by default 1.
+        z : int, optional
+            Lags in exogenous variable, by default 0.
+        verbose: bool 
+            Will print key steps during fitting.
+
+    Example
+    ----------
+    from garch import GARCH
+    >>> garch = GARCH(p=1, q=1, z=1, verbose=True)
+    >>> garch.train(returns, x=x)
+
+    >>> garch.summary()
+        # Will print out parameter statistics
+    
+    
+    >>> garch.loglikelihood
+
     """
 
     def __init__(self, alpha: float = 0, beta: float = 0, omega: float = 0,
@@ -21,13 +55,13 @@ class GARCH:
         Parameters
         ----------
         alpha : float, optional
-            The ARCH component parameter, by default 0.1.
+            The ARCH component parameter.
         beta : float, optional
-            The GARCH component parameter, by default 0.9.
+            The GARCH component parameter.
         omega : float, optional
-            The constant term in the variance equation, by default 0.1.
+            The constant term in the variance equation.
         gammas : float, optional
-            The coefficient for exogenous variables, by default 0.1.
+            The coefficient for exogenous variables.
         mu : float, optional
             Mean of the returns, by default None.
         p : int, optional
@@ -35,7 +69,9 @@ class GARCH:
         q : int, optional
             Lag order for the GARCH component, by default 1.
         z : int, optional
-            Lags in exogenous variable, by default 1. If 
+            Lags in exogenous variable, by default 0.
+        verbose: bool 
+            Will print key steps during fitting.
         """
         self.alpha = np.array([alpha] * p)
         self.beta = np.array([beta] * q)
@@ -95,8 +131,6 @@ class GARCH:
         if x is not None:
             x = np.array(x)
             exo_var_count = x.shape[1]
-            if exo_var_count != self.z:
-                raise ValueError('Exo variable shape does not match z parameter. Pass in data of shape (T, z)')
 
             init_gammas = np.array([0.5] * exo_var_count * self.z)
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta, *init_gammas])
@@ -109,13 +143,15 @@ class GARCH:
         start = time.time()
         
         opt_result = opt.minimize(
-            self.log_likelihood,
+            self.calculate_log_likelihood,
             x0=init_params,
             args=(y, e, x, True),
             method=method,
             callback=callback_func,
             options={'maxiter': maxiter}
         )
+
+        self.loglikelihood = -1*opt_result.fun
 
         end = time.time()      
         if self.verbose:
@@ -137,7 +173,7 @@ class GARCH:
         self.information_matrix = self.calculate_information_matrix(e, self.sigma2, x)
 
 
-    def log_likelihood(self, params_repam, y: pd.Series, e, x=None, fmin=False):
+    def calculate_log_likelihood(self, params_repam, y: pd.Series, e, x=None, fmin=False):
         """
         Calculate the log likelihood of the GARCH model.
 
@@ -190,6 +226,8 @@ class GARCH:
         init_value:
             If not passed in, will use unconditional expectation of the parameter.
 
+        x: array of shape (t,), representing one exogenous feature.
+
         Returns
         -------
         array_like
@@ -205,24 +243,25 @@ class GARCH:
                 else:
                     init_value = ((self.omega + np.sum(self.gammas*np.mean(x**2))) 
                               /((1 - self.beta) * (1 - self.alpha - self.beta)))
-            elif param == 'gamma':
+            elif param == 'gammas':
                 init_value = np.mean(self.x**2) / (1 - self.beta)
             else:
-                print('Wrong param value passed in')
+                print('Wrong param value passed into compute_sigma2_first_derivative')
                 return
 
         res = np.zeros(self.n_obs)
         res[0] = init_value
 
         for t in range(1, self.n_obs):
+            
             if param == 'omega':
                 res[t] = 1 + self.beta * res[t-1]
             elif param == 'alpha':
                 res[t] = e[t-1]**2 + self.beta * res[t-1]
             elif param == 'beta':
                 res[t] = sigma2[t-1] + self.beta * res[t-1]
-            elif param == 'gamma':
-                res[t] = np.sum(x[t,:]**2) + self.beta * res[t-1]
+            elif param == 'gammas':
+                res[t] = x[t]**2 + self.beta * res[t-1]
         
         return res
 
@@ -266,9 +305,12 @@ class GARCH:
                 else:
                     init_value = ((self.omega + np.sum(self.gammas*np.mean(self.x**2)))
                               /((1 - self.beta)**2 * (1 - self.alpha - self.beta)))
-            elif param_2 == 'gamma':
-                init_value = np.mean(self.x**2) / (1 - self.beta)**2 
-
+            elif param_2 == 'gammas':
+                init_value = np.mean(self.x**2) / (1 - self.beta)**2
+            else:
+                print('Wrong param value passed into compute_sigma2_second_derivative')
+                return
+             
         res = np.zeros(self.n_obs)
         res[0] = init_value
 
@@ -335,11 +377,15 @@ class GARCH:
         NDArray
             The information matrix. 
         """
-        param_count = 1 + self.p + self.q + self.z
+        exo_var_count = self.model_params['gammas'].flatten().shape[0]
+        param_count = 1 + self.p + self.q + self.z * exo_var_count
         information_matrix = np.ones((param_count, param_count))
 
         # Go in the order of omega, alpha, beta, gamma
-        params = ['omega'].extend(['alpha']*self.p).extend(['beta']*self.q).extend(['gammas']*self.z)
+        params = ['omega']
+        params.extend(['alpha']*self.p)
+        params.extend(['beta']*self.q)
+        params.extend(['gammas']*(self.z*exo_var_count))
         
         first_pd = []  # first pd sigma to each parameter.
         second_pd = [[] for _ in range(param_count)]
@@ -347,9 +393,11 @@ class GARCH:
         # 1. Compute all first derivative sigma to 4 params. 
         cur_z = 0
         for i in range(param_count):  # can do list comprehension.
-            first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, x=x[:,cur_z], init_value=init_value)
             if params[i] == 'gammas':
+                first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, x=x[:,cur_z], init_value=init_value)
                 cur_z += 1
+            else:
+                first_derivatives = self.compute_sigma2_first_derivative(params[i], e=e, sigma2=sigma2, init_value=init_value)
             first_pd.append(first_derivatives)
 
         # 2. Compute all second derivative sigma to each param. For 4 params, now we do 16 operations, but can cut to 10.
@@ -372,8 +420,6 @@ class GARCH:
             for col in range(param_count):
                 information_matrix[row][col] = -1 * self.compute_ll_second_derivative(e, sigma2, second_pd[row][col], first_pd[row], first_pd[col])
 
-        print(information_matrix)
-
         return information_matrix
     
 
@@ -391,9 +437,6 @@ class GARCH:
                 for param_ind, param_val in enumerate(v):
                     index.append(f"{k}[{param_ind}]")
                     coef.append(param_val)
-
-        print(index)
-        print(coef)
 
         diagnosis_df = pd.DataFrame(data={'coef': coef, 'std err': np.sqrt(info_mat_inv)}, index=index)
         diagnosis_df['t'] = diagnosis_df['coef'] / diagnosis_df['std err']
@@ -483,35 +526,34 @@ class GARCH:
 if __name__ == "__main__":
     import random
 
-    def generate_data(omega: float, alpha: float, beta: float, gamma: float, T: int = 1000):
+    def generate_data(omega: float, alpha: float, beta: float, gamma: float, T: int = 1000, exo_var_count=1):
         e = np.zeros(T)
         sigma2 = np.zeros(T)
-        x = np.random.randn(T, 1)
+        x = np.random.randn(T, exo_var_count)
 
         sigma2[0] = 1  
 
         for t in range(1, T):  
-            sigma2[t] = omega + alpha * e[t-1]**2 + beta * sigma2[t-1] + gamma * x[t-1]**2
+            sigma2[t] = omega + alpha * e[t-1]**2 + beta * sigma2[t-1] + gamma * x[t-1, 0]**2 
             e[t] = np.random.normal(0, np.sqrt(sigma2[t]))
 
         return e, sigma2, x
 
 
-    omega, alpha, beta, gamma = 0.1, 0.3, 0.4, 0.15
-    e, sigma2, x = generate_data(omega, alpha, beta, gamma, T = 750)
+    omega, alpha, beta, gamma = 0.1, 0.3, 0.4, 0.2
+    e, sigma2, x = generate_data(omega, alpha, beta, gamma, T = 750, exo_var_count=3)
 
     # Fit using our library. 
     garch = GARCH(p=1, q=1, z=1, verbose=True)
     garch.train(e, x=x)
 
-    #print(garch.information_matrix)
-    #print(garch.information_matrix_0_start)
+    print(garch.summary())
+    print(garch.loglikelihood)
 
+    # Fit using ARCH library
+    from arch import arch_model
+    model = arch_model(e, vol='GARCH', mean='zero', p=1, q=1)
+    garch_fit = model.fit(disp='off', cov_type='classic')
 
-    # Fit using ARCH library, without exogeneous
-    #from arch import arch_model
-    #model = arch_model(e, vol='GARCH', mean='zero', p=1, q=1)
-    #garch_fit = model.fit(disp='off', cov_type='classic')
-
-    #print(garch_fit.summary())
+    print(garch_fit.summary())
 
