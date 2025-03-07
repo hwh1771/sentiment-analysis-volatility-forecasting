@@ -7,6 +7,6 @@ pandas==2.2.2
 pynytimes==0.10.0
 scipy==1.13.1
 statsmodels==0.14.3
-#torch==2.4.0+cu121  # Not needed if not running genAI sentiment model.
-#transformers==4.44.0  # Not needed if not running genAI sentiment model.
+torch==2.4.0  # Not needed if not running genAI sentiment model.
+transformers==4.44.0  # Not needed if not running genAI sentiment model.
 yfinance==0.2.54
