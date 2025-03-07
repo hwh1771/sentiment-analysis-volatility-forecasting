@@ -1,0 +1,272 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb}
+
+\begin{document}
+
+\section{Define the GARCHX model}
+
+\subsection{Mean Model}
+\begin{align}
+    r_t &= \mu + \sigma_t z_t \\
+    z_t &\sim i.i.d\ N(0, 1)
+\end{align}
+where $e_t = \sigma_t z_t$.
+
+\subsection{Volatility Model}
+We introduce an exogenous term $x_t^2$ to the traditional GARCH model. The squared time series ensures non-negativity of $\sigma_t^2$ at any time step.
+\begin{align}
+    \sigma_t^2 &= \omega + \alpha e_{t-1}^2 + \beta \sigma_{t-1}^2 + \gamma x_t^2
+\end{align}
+
+
+\section{Log Likelihood}
+For simplicity, assume $\mu=0$. Let $\theta = (\omega, \alpha, \beta, \gamma)$. Then the log likelihood function is defined as a function of the conditional densities of $r_t$ as such: 
+\begin{align}
+    l(\theta) &=  \sum_{t=1}^T \frac{1}{2} \left(-\log{2\pi} -\log{\sigma_t^2} - \frac{e_t^2}{\sigma_t^2} \right)
+\end{align}
+
+The first and second partial derivatives of $l(\theta)$ are as follows:
+\begin{align}
+    \frac{\partial }{\partial \theta} l(\theta) &=  \sum_{t=1}^T \frac{1}{2} \left(\frac{e_t^2}{\sigma_t^4} - \frac{1}{\sigma_t^2}\right) \frac{\partial \sigma_t^2}{\partial \theta}
+\end{align}
+
+\begin{align}
+    \frac{\partial^2 }{\partial \theta_1 \partial \theta_2} l(\theta) &= - \frac{1}{2} \sum_{t=1}^T \left( \frac{\partial^2 \sigma_t^2}{\partial \theta_1 \partial \theta_2} \left(\frac{1}{\sigma_t^2} - \frac{e_t^2}{\sigma_t^4}\right) + \frac{\partial \sigma_t^2}{\partial \theta_1} \frac{\partial \sigma_t^2}{\partial \theta_2} \left(\frac{2e_t^2}{\sigma_t^6} - \frac{1}{\sigma_t^4}\right) \right) 
+\end{align}
+
+\section{Partial Derivatives of $\sigma^2$}
+This section merely serves to supplement the previous section, as the first and second partial derivatives of $\sigma^2$ are used in the score funtion and information matrix. 
+
+\subsection{First Partial Derivative}
+\begin{align}
+    \frac{\partial \sigma_{t}^2}{\partial \omega} &= 1 + \beta \frac{\partial \sigma_{t-1}^2}{\partial \omega} \\
+    \frac{\partial \sigma_{t}^2}{\partial \alpha} &= e_{t-1}^2 + \beta \frac{\partial \sigma_{t-1}^2}{\partial \alpha} \\
+    \frac{\partial \sigma_{t}^2}{\partial \beta} &= \sigma_{t-1}^2 + \beta \frac{\partial \sigma_{t-1}^2}{\partial \beta} \\
+    \frac{\partial \sigma_{t}^2}{\partial \gamma} &= x_{t-1}^2 + \beta \frac{\partial \sigma_{t-1}^2}{\partial \gamma}
+\end{align}
+
+\subsection{Unconditional Expectation of First Derivatives of $\sigma^2$}
+\begin{align}
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \omega}\right] &= \frac{1}{1-\beta} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \alpha}\right] &= \frac{\omega + \gamma \mu_{x^2}}{(1-\beta)(1-\alpha-\beta)} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \beta}\right] &= \frac{\omega + \gamma \mu_{x^2}}{(1-\beta)(1-\alpha-\beta)} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \gamma}\right] &= \frac{\mu_{x^2}}{1-\beta} \\
+\end{align}
+
+\subsection{Second Derivative to $\sigma^2$}
+There exist two cases. 
+
+\textbf{Case a:} If both parameters $\theta_i, \theta_j$ are not $\beta$
+\begin{align}
+    \frac{\partial^2 \sigma_{t}^2}{\partial \theta_i \theta_j} &= \beta \frac{\partial^2 \sigma_{t-1}^2}{\partial \theta_i \theta_j}
+\end{align}
+with expectation:
+\begin{align}
+    E\left[\frac{\partial^2 \sigma_{t}^2}{\partial\theta_i \partial\theta_j}\right] = 0
+\end{align}
+
+\textbf{Case b:} If at least one of the parameters $\theta_i, \theta_j$ is $\beta$
+\begin{align}
+    \frac{\partial^2 \sigma_{t}^2}{\partial \beta \theta_j} &= \frac{\partial \sigma_{t-1}^2}{\partial \theta_j } + \beta \frac{\partial^2 \sigma_{t-1}^2}{\partial \beta \theta_j}
+\end{align}
+
+
+\section{Stationarity of Time Series}
+
+\subsection{Stationarity of $\sigma_t^2$}
+
+We know that $e_t = \sigma_t z_t$, since $z_t \sim i.i.d \ N(0,1)$,
+
+\[
+\begin{split}
+E[e_t^2] &= E[\sigma_t^2 z_t^2] \\
+&= E[\sigma_t^2] E[z_t^2] \\
+&= E[\sigma_t^2]
+\end{split}
+\]
+
+\textit{Note that $E[z_t^2]$ is the expectation of a chi-squared distribution with 1 degree of freedom.}
+
+Using the fact that $E[e_t^2] = E[\sigma_t^2]$,
+\[
+\begin{split}
+    E[\sigma_t^2] &= E[\omega + \alpha \sigma_{t-1}^2 + \beta e_{t-1}^2 + \gamma x_t^2] \\
+    &= E[\omega] + \alpha E[\sigma_{t-1}^2] + \beta E[e_{t-1}^2] + \gamma E[x_t^2] \\
+    &= \omega + \gamma E[x_t^2] + \alpha E[\sigma_{t-1}^2] + \beta E[e_{t-1}^2] \\
+    &= \omega + \gamma k + (\alpha + \beta) E[\sigma_{t-1}^2] \\
+    &= \omega + \gamma k + (\alpha + \beta) E[\omega + \alpha \sigma_{t-2}^2 + \beta e_{t-2}^2 + \gamma x_{t-1}^2] \\
+    &= \ldots \\
+    &= (\omega + \gamma k) + [1+ (\alpha + \beta) + (\alpha + \beta)^2 + (\alpha + \beta)^3 + \ldots] \\
+    &= \frac{\omega + \gamma k}{1-(\alpha+\beta)}
+\end{split}
+\]
+
+where $k = E[x_t^2]$, which is a constant, given that we assume $x_t^2$ is stationary.
+
+From this, we know that $|\alpha + \beta| < 1$.
+
+Since $x_t^2$ is stationary, then $E[x_t^2, x_{t-s}^2]$ is not dependent on $t$.
+
+Following that $x_t^2$ is stationary, we prove that
+
+\[
+\begin{split}
+Cov[\sigma_t^2,\sigma_{t-s}^2] &= E[\sigma_t^2 \sigma_{t-s}^2] - E[\sigma_t^2]E[\sigma_{t-s}^2] \\
+&= E[\sigma_t^2 \sigma_{t-s}^2] - \left(\frac{\omega + \gamma k}{1-(\alpha+\beta)}\right)^2
+\end{split}
+\]
+
+We found 
+
+\[
+\begin{split}
+E[\sigma_t^2 \sigma_{t-s}^2] &= E[(\omega + \alpha \sigma_{t-1}^2 + \beta e_{t-1}^2 + \gamma x_t^2)(\omega + \alpha \sigma_{t-2}^2 + \beta e_{t-2}^2 + \gamma x_{t-1}^2)] \\
+&= \ldots \\
+&= (\omega^2 + 2\gamma \omega k) + (2 \alpha \omega + 2 \beta \omega + 2 \alpha \gamma k + 2 \beta \gamma k) \left(\frac{\omega + \gamma k}{1-(\alpha+\beta)}\right) \\
+&\quad + (\alpha + \beta)^2 E[\sigma_{t-1}^2 \sigma_{t-s-1}^2] + \gamma^2 E[x_t^2 x_{t-s}^2]
+\end{split}
+\]
+
+Since we know $x_t$ is stationary, $Cov[x_t^2,x_{t-s}^2] = E[x_t^2 x_{t-s}^2] - E[x_t^2]E[x_{t-s}^2]$ does not depend on $t$, thus we can conclude that $E[x_t^2 x_{t-s}^2]$ does not depend on $t$.
+
+This shows that $Cov[\sigma_t^2,\sigma_{t-s}^2]$ does not depend on $t$.
+
+We see that the following is a stationary AR(1) process now as $(\alpha+\beta) < 1 \implies  (\alpha+\beta)^2 < 1$:
+
+\[
+\begin{split}
+&E[\sigma_t^2 \sigma_{t-s}^2] = (\omega^2 + 2\gamma \omega k) + 2(\alpha\omega + \beta\omega + \alpha\gamma k + \beta\gamma k) \frac{\omega+\gamma k}{1-(\alpha+\beta)} \\
+&\quad + (\alpha+\beta)^2 E[\sigma_{t-1}^2\sigma_{t-s-1}^2] + \gamma^2 E[x_t^2 x_{t-s}^2] \\
+&\implies E[\sigma_t^2 \sigma_{t-s}^2] \text{ does not depend on }t \\
+&\implies cov(\sigma_t^2, \sigma_{t-s}^2) = E[\sigma_t^2 \sigma_{t-s}^2] - \left(\frac{\omega+\gamma k}{1-(\alpha+\beta)}\right)^2 \text{ does not depend on }t \\
+&\therefore \{\sigma_t^2\} \text{ is stationary}.
+\end{split}
+\]
+
+\subsection{Stationarity of $r_t$}
+
+First, note that $z_t \sim i.i.d \ N(0,1) \implies E[z_t] = 0$.
+
+To show $E[r_t]$ is constant:
+
+\[
+\begin{split}
+E[r_t] &= E[\mu + \sigma_t z_t] \\
+        &= \mu + E[\sigma_t z_t] \\
+        &= \mu + E[\sigma_t]E[z_t] \\
+        &= \mu
+\end{split}
+\]
+
+Next, we show finite variance of $r_t$:
+
+\[
+\begin{split}
+Var(r_t) &= E[\sigma_t^2] \\ 
+        &= \frac{\omega + \gamma k}{1-(\alpha+\beta)}
+\end{split}
+\]
+
+Lastly, we show that the autocovariance of $r_t$ is not time dependent:
+
+\[
+\begin{split}
+Cov(r_t, r_{t-r}) &= Cov(e_t, e_{t-r}) \\ 
+        &= E[e_t e_{t-r}] -E[e_t] E[e_{t-r}] \\ 
+        &= 0
+\end{split}
+\]
+
+\subsection{Convergence of $e_t$}
+
+We know that $e_t = \sigma_t z_t$,
+
+and $z_t$ is
+
+\[
+z_t  \sim i.i.d \ N(0, 1)
+\]
+
+Therefore,
+
+\[
+\begin{split}
+    E[e_{t}| \mathcal{F}_{t-1}] &= E[\sigma_t z_t| \mathcal{F}_{t-1}] \\
+    &= E[z_{t}| \mathcal{F}_{t-1}] \ E[\sigma_t| \mathcal{F}_{t-1}] \\
+    &= 0
+\end{split}
+\]
+
+Thus, we conclude that $e_t$ is an MDS sequence.
+
+For simplicity, we assume our time series is ergodic.
+
+By the Martingale CLT, as $e_t$ is a stationary and ergodic Martingale difference,
+
+\[
+\frac{1}{\sqrt{n}} \sum_{t=1}^n e_t \xrightarrow[]{\text{d}} N(0, \sigma^2)
+\]
+
+
+\section{Consistency of the MLE}
+
+Let the score function be defined as $s(\theta) = \frac{\partial}{\partial\theta} l(\theta)$ and the information $I(\theta) = \frac{\partial^2}{\partial\theta^2} l(\theta)$. 
+
+Under suitable regularity conditions, and having shown that the time series is stationary and ergodic,
+
+\[
+\hat{\theta} \xrightarrow[]{\text{p}} \theta_0
+\]
+
+
+\section{Asymptotic normality of the MLE}
+
+First, we consider the distribution of the true score $s(\theta_0)$. Under the regularity conditions, it can be shown that $E(s_n(\theta_0)) = 0$ and $Var(s_n(\theta_0)) = I_E(\theta_0)$. Furthermore, as we have shown that $r_t$ converges in distribution by the Martingale CLT, the score function
+
+\[
+\begin{split}
+ \frac{1}{\sqrt{n}} s_n(\theta_0) &= \sum_{t=1}^n \frac{\partial}{\partial\theta}\log f(r_t | \theta_0) \\ 
+ &\xrightarrow[]{\text{d}} N(0, I_E(\theta_0))
+\end{split}
+\]
+
+converges in distribution to a multivariate normal distribution $N(0, I_E(\theta_0))$.
+
+Next, consider a first-order multivariate Taylor expansion of the score function at $\theta_0$ about $\hat{\theta}$:
+
+\[
+s_n(\theta_0) \approx s_n(\hat{\theta}) - I_n(\theta_0) (\theta_0 - \hat{\theta})
+\]
+
+Since by definition $s_n(\hat{\theta}) = 0$,
+
+\[
+\begin{split}
+ s_n(\theta_0) &= - I_n(\theta_0) (\theta_0 - \hat{\theta}) \\
+ (\hat{\theta} - \theta_0) &=  I_n(\theta_0)^{-1} s_n(\theta_0) \\
+ \sqrt{n}(\hat{\theta} - \theta_0) &=  \sqrt{n} I_n(\theta_0)^{-1} s_n(\theta_0) 
+\end{split}
+\]
+
+As shown earlier,
+
+\[
+\frac{1}{\sqrt{n}} s_n(\theta_0)  \xrightarrow[]{\text{d}} N(0, I_E(\theta_0))
+\]
+
+and by the law of large numbers,
+
+\[
+\frac{1}{n} I_n(\theta_0) = \frac{1}{n} \sum_{t=1}^n \frac{\partial^2}{\partial\theta^2} \log(f(x_i|\theta))  \xrightarrow[]{\text{p}} I_E(\theta_0)
+\]
+
+Therefore, by Slutsky's theorem,
+
+\[
+\sqrt{n}(\hat{\theta} - \theta_0) \xrightarrow[]{\text{d}} I_E(\theta_0)^{-1} N(0, I_E(\theta_0)) = N(0, I_E(\theta_0)^{-1})
+\]
+
+
+
+
+\end{document}
