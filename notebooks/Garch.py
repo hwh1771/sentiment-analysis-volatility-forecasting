@@ -176,6 +176,7 @@ class GARCH:
         end = time.time()      
         if self.verbose:
             print(f'Optimising finished in {(end-start):.3f}s')
+            print(opt_result)
        
        # Save estimated parameters after fitting.
         self.model_params = self._parse_params(opt_result.x, self.x, as_dict=True)
