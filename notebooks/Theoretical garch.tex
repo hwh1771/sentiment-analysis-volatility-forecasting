@@ -1,5 +1,7 @@
 \documentclass{article}
 \usepackage{amsmath, amssymb}
+\DeclareRobustCommand{\bbone}{\text{\usefont{U}{bbold}{m}{n}1}}
+\DeclareMathOperator{\EX}{\mathbb{E}}% expected value
 
 \begin{document}
 
@@ -46,11 +48,28 @@ This section merely serves to supplement the previous section, as the first and 
 \end{align}
 
 \subsection{Unconditional Expectation of First Derivatives of $\sigma^2$}
+We first derive the unconditional expectation of $\sigma^2$ with respect to $\alpha$. The same logic is then applied to the other parameters. We have shown that $\EX(e_{t}^2)$ = $\EX(\sigma_{t}^2) = \frac{\omega + \gamma k}{1 - (\alpha+\beta)}$ for all $t$, where $k =\EX(x^2) $. Let $ \frac{\omega + \gamma k}{1 - (\alpha+\beta)} = C $ for brevity.
+Then when $\beta < 1$, 
+
+\[
+\begin{split}
+    \frac{\partial \sigma_{t}^2}{\partial \alpha} &= e_{t-1}^2 + \beta \frac{\partial \sigma_{t-1}^2}{\partial \alpha} \\
+    \EX\left[\frac{\partial \sigma_{t}^2}{\partial \alpha}\right] &= C + \beta \EX\left[\frac{\partial \sigma_{t-1}^2}{\partial \alpha}\right]\\
+     &= C + \beta \left( C + \beta \EX\left[\frac{\partial \sigma_{t-2}^2}{\partial \alpha}\right] \right) \\
+     &= C + \beta C + \beta^2 \left( C + \beta \EX\left[\frac{\partial \sigma_{t-3}^2}{\partial \alpha}\right] \right) \\
+     &= \sum_{i=0}^{\infty} C\beta^{i}\\
+     &= \frac{C}{1-\beta}\\ 
+     &= \frac{\omega + \gamma k}{(1-\beta)(1-(\alpha+\beta))}
+\end{split}
+\]
+
+As long as $\beta < 1$, the unconditional expectation of first derivatives exist. Using the same logic, the first partial derivatives are as follows:
+
 \begin{align}
     E\left[\frac{\partial \sigma_{t}^2}{\partial \omega}\right] &= \frac{1}{1-\beta} \\
-    E\left[\frac{\partial \sigma_{t}^2}{\partial \alpha}\right] &= \frac{\omega + \gamma \mu_{x^2}}{(1-\beta)(1-\alpha-\beta)} \\
-    E\left[\frac{\partial \sigma_{t}^2}{\partial \beta}\right] &= \frac{\omega + \gamma \mu_{x^2}}{(1-\beta)(1-\alpha-\beta)} \\
-    E\left[\frac{\partial \sigma_{t}^2}{\partial \gamma}\right] &= \frac{\mu_{x^2}}{1-\beta} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \alpha}\right] &= \frac{\omega + \gamma k}{(1-\beta)(1-\alpha-\beta)} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \beta}\right] &= \frac{\omega + \gamma k}{(1-\beta)(1-\alpha-\beta)} \\
+    E\left[\frac{\partial \sigma_{t}^2}{\partial \gamma}\right] &= \frac{k}{1-\beta}
 \end{align}
 
 \subsection{Second Derivative to $\sigma^2$}
