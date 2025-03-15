@@ -98,7 +98,7 @@ class GARCH:
 
 
     def train(self, y: pd.Series, x=None, callback_func=None, maxiter=100,
-              method='L-BFGS-B'):
+              method='L-BFGS-B', suppress_warnings=False, use_constraints=False):
         """
         Estimate model parameters using MLE and fit the GARCH model to the data.
 
@@ -153,14 +153,15 @@ class GARCH:
         else:
             init_params = self.inv_repam([init_omega, *init_alpha, *init_beta])
 
-        if self.calculate_log_likelihood(init_params, self.y, e, self.x, True) < 0:
+        if not suppress_warnings and self.calculate_log_likelihood(init_params, self.y, e, self.x, True) < 0:
             print('DataScaleWarning: y is poorly scaled, which may affect convergence of the optimizer when estimating the model parameters. \nRecommendation: pass in 100*y')
 
         if self.verbose:
             print('Optimising...')
 
         start = time.time()
-
+        
+        constraints=({'type': 'ineq', 'fun': lambda x: 1 - x[1] - x[2]}) if use_constraints else None
         opt_result = opt.minimize(
             self.calculate_log_likelihood,
             x0=init_params,
@@ -168,10 +169,13 @@ class GARCH:
             method=method,
             callback=callback_func,
             options={'maxiter': maxiter},
-            bounds=opt_bounds
+            bounds=opt_bounds,
+            constraints = constraints
         )
 
         self.loglikelihood = -0.5*self.n_obs*(opt_result.fun + np.log(2*np.pi))
+        opt_success: bool = opt_result.success
+        
 
         end = time.time()      
         if self.verbose:
@@ -192,6 +196,8 @@ class GARCH:
         self.sigma2 = self.compute_sigma2(e, init_sigma=np.var(y), x=self.x)
 
         self.information_matrix = self.calculate_information_matrix(e, self.sigma2, self.x)
+
+        return opt_success
 
 
     def calculate_log_likelihood(self, params_repam, y: pd.Series, e, x=None, fmin=False):
@@ -214,8 +220,8 @@ class GARCH:
         p, q, z = self.p, self.q, self.z
         omega, alpha, beta, gamma = self._parse_params(params_repam, x)
 
-        if alpha+beta >= 1:
-            return 10
+        #if alpha+beta >= 1:
+        #    return 10
        
         # Calculation for log likelihood
         avg_log_like = 0
