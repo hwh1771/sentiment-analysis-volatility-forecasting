@@ -7,7 +7,6 @@ from matplotlib import pyplot as plt
 import scipy.optimize as opt
 from scipy.stats import t 
 
-
 class GARCH:
     """
     GARCH model with exogenous parameter in the volatility component.
@@ -477,6 +476,11 @@ class GARCH:
         
         df = self.n_obs - (self.p + self.q + self.z + 1)
         diagnosis_df['P>|t|'] = t.sf(abs(diagnosis_df['t']), df=df)
+        t_half = t.ppf(1 - 0.025, df)
+        diagnosis_df['C.I.'] = diagnosis_df.apply(
+            lambda x: f"[{(x['coef'] - t_half * x['std err']):.3f}, {(x['coef'] + t_half * x['std err']):.3f}]",
+            axis=1
+        )
 
         return diagnosis_df
 
@@ -576,8 +580,8 @@ if __name__ == "__main__":
     e, sigma2, x = generate_data(omega, alpha, beta, gamma, T = 750, exo_var_count=1)
 
     # Fit using our library. 
-    garch = GARCH(p=1, q=1, z=1, verbose=True)
-    garch.train(e, x=x)
+    garch = GARCH(p=1, q=1, verbose=True)
+    garch.train(e)
 
     print(garch.summary())
     print(garch.loglikelihood)
