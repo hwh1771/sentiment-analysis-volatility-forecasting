@@ -193,6 +193,7 @@ class GARCH:
 
         # Compute sigma2(hat) values using optimised parameters.        
         self.sigma2 = self.compute_sigma2(e, init_sigma=np.var(y), x=self.x)
+        self.resids = self._compute_resids()
 
         self.information_matrix = self.calculate_information_matrix(e, self.sigma2, self.x)
 
@@ -549,6 +550,13 @@ class GARCH:
             else:
                 sigma2[t] = self.omega + np.sum(self.alpha * (e[t - self.p: t] ** 2)) + np.sum(self.beta * (sigma2[t - self.q: t]))
         return sigma2
+    
+
+    def _compute_resids(self) -> np.array:
+        assert len(self.y) == len(self.sigma2)
+        resids = (self.y - self.mu) / self.sigma2
+        return resids
+        
 
 
     def repam(self, params):
@@ -585,6 +593,7 @@ if __name__ == "__main__":
 
     print(garch.summary())
     print(garch.loglikelihood)
+    print(garch.resids)
 
     # Fit using ARCH library
     from arch import arch_model
